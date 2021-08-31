@@ -1,6 +1,7 @@
 import time
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
 import healpy as hp
 from scipy.special import legendre
 
@@ -13,6 +14,8 @@ parser.add_argument('--w_file', '-w', type=str, default=None, required=True,
                     help='SGWB maps file')
 parser.add_argument('--g_file', '-g', type=str, default=None, required=True,
                     help='Galaxy maps file')
+parser.add_argument('--s_file', '-s', type=str, default=None, required=True,
+                    help='Galaxy simulation maps file')
 parser.add_argument('--verbose', '-v', default=False, action='store_true',
                     help='Verbose mode')
 args = parser.parse_args()
@@ -20,17 +23,14 @@ args = parser.parse_args()
 if args.verbose:
     time_start = time.time()
 
+
 # Load maps covariances and maps
 inv_cov_ww = np.load(args.w_file)['M_p_pp'][:, :, 0, 0].astype('float64')
 inv_cov_gg = np.load(args.g_file)['inv_cov']
 z_w = np.load(args.w_file)['Z_p'][:, 0].astype('float64')
 z_g = np.dot(inv_cov_gg, np.load(args.g_file)['map'])
-
-# Fake stack of different galaxy maps TODO
-nmaps_g = 10
-zs_g = np.tile(z_g, (nmaps_g, 1))
-rnd = np.random.rand(nmaps_g, len(z_g))
-zs_g = zs_g * (1. + rnd/100.)
+zs_g = np.dot(inv_cov_gg, np.load(args.s_file)['maps'].T).T
+nmaps_g = len(zs_g)
 
 # To calculate the Qmats we assume that all the maps have the same resolution
 # Number of pixels
@@ -76,42 +76,65 @@ b_gg = b_gg.trace(axis1=1, axis2=2)
 
 if args.verbose:
     dt = time.time() - time_start
-    print('Preliminary stuff computed in {:.4f} seconds'.format(dt))
+    print('Preliminary stuff computed in {:.4f} sec'.format(dt))
 
 
-# Main loop
-cell_ww = np.zeros((nmaps_g, lmax+1))
-cell_wg = np.zeros((nmaps_g, lmax+1))
-cell_gg = np.zeros((nmaps_g, lmax+1))
-for n, z_g in enumerate(zs_g):
-    if args.verbose:
-        time_start = time.time()
+def get_cls(z_w, z_g, Q=Qmats,
+            b_ww=b_ww, b_wg=b_wg, b_gg=b_gg,
+            iF_ww=inv_F_ww, iF_wg=inv_F_wg, iF_gg=inv_F_gg):
     # c's
-    c_ww = z_w.dot(Qmats).dot(z_w)
-    c_wg = z_w.dot(Qmats).dot(z_g)
-    c_gg = z_g.dot(Qmats).dot(z_g)
+    c_ww = z_w.dot(Q).dot(z_w)
+    c_wg = z_w.dot(Q).dot(z_g)
+    c_gg = z_g.dot(Q).dot(z_g)
     # Cell's
-    cell_ww[n] = inv_F_ww.dot(c_ww-b_ww)
-    cell_wg[n] = inv_F_wg.dot(c_wg-b_wg)
-    cell_gg[n] = inv_F_gg.dot(c_gg-b_gg)
+    cell_ww = iF_ww.dot(c_ww-b_ww)
+    cell_wg = iF_wg.dot(c_wg-b_wg)
+    cell_gg = iF_gg.dot(c_gg-b_gg)
+    return cell_ww, cell_wg, cell_gg
+
+
+# Get Cl's
+cell_ww, cell_wg, cell_gg = get_cls(z_w, z_g)
+
+# Main loop for the simulations
+cell_ww_sim = np.zeros((nmaps_g, lmax+1))
+cell_wg_sim = np.zeros((nmaps_g, lmax+1))
+cell_gg_sim = np.zeros((nmaps_g, lmax+1))
+time_start = time.time()
+for n, z_g in enumerate(zs_g):
+    cell_ww_sim[n], cell_wg_sim[n], cell_gg_sim[n] = get_cls(z_w, z_g)
     if args.verbose:
-        dt = time.time() - time_start
-        print('----> Cells {}/{} in {:.4f} seconds'.format(n+1, len(zs_g), dt))
+        if np.mod(n, 50) == 0:
+            dt = time.time() - time_start
+            print('----> Cells {}/{} in {:.4f} sec'.format(n+1, len(zs_g), dt))
+            time_start = time.time()
 
 
 if args.verbose:
     time_start = time.time()
 
 # Get mean and variance
-cell_ww_mean = cell_ww.mean(axis=0)
-cell_wg_mean = cell_wg.mean(axis=0)
-cell_gg_mean = cell_gg.mean(axis=0)
-cell_ww_std = cell_ww.std(axis=0)
-cell_wg_std = cell_wg.std(axis=0)
-cell_gg_std = cell_gg.std(axis=0)
+ells = np.arange(lmax+1)
+cell_ww_mean = cell_ww_sim.mean(axis=0)
+cell_wg_mean = cell_wg_sim.mean(axis=0)
+cell_gg_mean = cell_gg_sim.mean(axis=0)
+cell_ww_std = cell_ww_sim.std(axis=0)
+cell_wg_std = cell_wg_sim.std(axis=0)
+cell_gg_std = cell_gg_sim.std(axis=0)
+cell_wg_cov = np.cov(cell_wg_sim.T)
 
 if args.verbose:
     dt = time.time() - time_start
     print('Mean and variance computed in {:.4f} seconds'.format(dt))
 
+plt.figure(figsize=(10, 7))
+plt.errorbar(ells, cell_wg, yerr=cell_wg_std, fmt='r.')
+plt.errorbar(ells, -cell_wg, yerr=cell_wg_std, fmt='rv')
+plt.plot(ells, cell_wg_mean, 'b.', label='mean sims')
+plt.plot(ells, -cell_wg_mean, 'bv')
+plt.yscale('log')
+plt.xlabel(r'$\ell$', fontsize=15)
+plt.ylabel(r'$C^{g\Omega}_\ell$', fontsize=15)
+plt.legend(loc='best')
+plt.savefig('./cl_wg.pdf')
 print('Success!')
