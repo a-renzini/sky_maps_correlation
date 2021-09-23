@@ -137,4 +137,16 @@ plt.xlabel(r'$\ell$', fontsize=15)
 plt.ylabel(r'$C^{g\Omega}_\ell$', fontsize=15)
 plt.legend(loc='best')
 plt.savefig('./cl_wg.pdf')
+
+
+np.savez('comp_1.npz',
+         ells=ells,
+         cell_ww=cell_ww,
+         cell_wg=cell_wg,
+         cell_gg=cell_gg,
+         cell_ww_std=cell_ww_std,
+         cell_wg_std=cell_wg_std,
+         cell_gg_std=cell_gg_std
+         )
+
 print('Success!')
